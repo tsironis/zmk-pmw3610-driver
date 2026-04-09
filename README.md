@@ -2,6 +2,9 @@
 
 This work is based on [badjeff's driver](https://github.com/badjeff/zmk-pmw3610-driver) with minor quality of life improvements (and 500 Hz). See badjeff's README for installation and usage.
 
+> [!TIP]
+> Use `zephyr-4.1` branch and `compatible = "pixart,pmw3610-efogtech";`
+
 ### Differences 
 
 #### KConfig
