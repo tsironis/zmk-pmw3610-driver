@@ -34,11 +34,11 @@ config PMW3610_IGNORE_FIRST_N
 
 config PMW3610_IGNORE_AFTER_REST
   bool "Ignore first events after rest too"
-  default n
+  default y
 
 config PMW3610_ANTI_WARP
   bool "Discard large movement after inactivity"
-  default n
+  default y
 
 config PMW3610_ANTI_WARP_THRES
   int "Movement less than this value is allowed"

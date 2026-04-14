@@ -515,9 +515,29 @@ static int pmw3610_report_data(const struct device *dev) {
         return 0;
     }
 
+#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
+    static int64_t last_smp_time = 0;
+    static int64_t last_rpt_time = 0;
+    const int64_t rpt_now = k_uptime_get();
+
+    // purge accumulated delta if last sample was too old
+    if (rpt_now - last_smp_time >= CONFIG_PMW3610_REPORT_INTERVAL_MIN) {
+        dx = 0;
+        dy = 0;
+    }
+    last_smp_time = rpt_now;
+#endif
+
     // accumulate delta until report in next iteration
     dx += x;
     dy += y;
+
+#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
+    // rate-limit reports to avoid flooding BLE HID queue
+    if (rpt_now - last_rpt_time < CONFIG_PMW3610_REPORT_INTERVAL_MIN) {
+        return 0;
+    }
+#endif
 
     // fetch report value
     const int16_t rx = (int16_t)CLAMP(dx, INT16_MIN, INT16_MAX);
@@ -526,6 +546,9 @@ static int pmw3610_report_data(const struct device *dev) {
     const bool have_y = ry != 0;
 
     if (have_x || have_y) {
+#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
+        last_rpt_time = rpt_now;
+#endif
         dx = 0;
         dy = 0;
         if (have_x) {
@@ -695,23 +718,24 @@ static const struct sensor_driver_api pmw3610_driver_api = {
 static int pmw3610_pm_action(const struct device *dev, enum pm_device_action action) {
     const struct pixart_config *config = dev->config;
 
-    if (!config->enable_pm_support || !config->rst_gpio.port) {
-        return 0;
-    }
-
     switch (action) {
     case PM_DEVICE_ACTION_SUSPEND:
+        pmw3610_set_interrupt(dev, false);
+        if (config->enable_pm_support && config->rst_gpio.port) {
             gpio_pin_set_dt(&config->rst_gpio, 1);
-            return 0;
+        }
+        return 0;
     case PM_DEVICE_ACTION_RESUME:
+        pmw3610_set_interrupt(dev, true);
+        if (config->enable_pm_support && config->rst_gpio.port) {
             gpio_pin_set_dt(&config->rst_gpio, 0);
-            return 0;
+        }
+        return 0;
     default:
         return -ENOTSUP;
     }
 }
 #endif // IS_ENABLED(CONFIG_PM_DEVICE)
-PM_DEVICE_DT_INST_DEFINE(n, pmw3610_pm_action);
 
 #define PMW3610_SPI_MODE (SPI_OP_MODE_MASTER | SPI_WORD_SET(8) | SPI_MODE_CPOL | \
                         SPI_MODE_CPHA | SPI_TRANSFER_MSB)
@@ -736,7 +760,9 @@ PM_DEVICE_DT_INST_DEFINE(n, pmw3610_pm_action);
         .init_retry_count = DT_PROP(DT_DRV_INST(n), init_retry_count),                             \
         .init_retry_interval = DT_PROP(DT_DRV_INST(n), init_retry_interval),                       \
     };                                                                                             \
-    DEVICE_DT_INST_DEFINE(n, pmw3610_init, NULL, &data##n, &config##n, POST_KERNEL,                \
+    PM_DEVICE_DT_INST_DEFINE(n, pmw3610_pm_action);                                                \
+    DEVICE_DT_INST_DEFINE(n, pmw3610_init, PM_DEVICE_DT_INST_GET(n),                               \
+                          &data##n, &config##n, POST_KERNEL,                                       \
                           CONFIG_INPUT_PMW3610_INIT_PRIORITY, &pmw3610_driver_api);
 
 DT_INST_FOREACH_STATUS_OKAY(PMW3610_DEFINE)
@@ -775,6 +801,7 @@ static int on_activity_state(const zmk_event_t *eh) {
         if (config->enable_pm_support && data->ready) {
             if (!enable) {
                 LOG_WRN("Powering down sensor ID%d", config->id);
+                pmw3610_set_interrupt(pmw3610_devs[i], false);
                 if (pmw3610_shutdown(pmw3610_devs[i]) != 0) {
                     LOG_ERR("Failed to power down sensor ID%d", config->id);
                 }
